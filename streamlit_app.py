@@ -241,60 +241,146 @@ def gradiente_proyectado(f, grad_f, A, b_vec, x0, alpha, tol, max_iter, tipo="Mi
     return x, hist
 
 # TEMA 4
-def resolver_cuadratica(Q, c, const, A, b_vec, tipo="Minimizar"):
-    def f_obj(x):
-        val = 0.5 * x.T @ Q @ x + c.T @ x + const
+import streamlit as st
+import numpy as np
+import sympy as sp
+from scipy.optimize import minimize
+
+# ============================================================
+# PARSER: FUNCIÓN CUADRÁTICA AUTOMÁTICA (NUEVO)
+# ============================================================
+def parse_quadratic(expr_str, vars_list):
+    """
+    Convierte una función simbólica a forma:
+    1/2 x^T Q x + c^T x + k
+    """
+    x = sp.symbols(vars_list)
+    expr = sp.sympify(expr_str)
+
+    n = len(x)
+
+    Q = np.zeros((n, n))
+    c = np.zeros(n)
+
+    # Gradiente y Hessiana
+    grad = [sp.diff(expr, xi) for xi in x]
+    hess = [[sp.diff(g, xj) for xj in x] for g in grad]
+
+    # Evaluar Hessiana numérica
+    H = sp.Matrix(hess)
+
+    # Q = Hessiana / 2 (por la forma 1/2 x^T Q x)
+    Q = np.array(H.tolist(), dtype=float)
+
+    # Vector c: gradiente en 0 menos términos cuadráticos ya incluidos
+    c = np.array([float(g.subs({xi: 0 for xi in x})) for g in grad])
+
+    # constante
+    k = float(expr.subs({xi: 0 for xi in x}))
+
+    return Q, c, k
+
+
+# ============================================================
+# PARSER DE RESTRICCIONES
+# ============================================================
+def parse_restrictions(text):
+    lines = text.strip().split("\n")
+    A = []
+    b = []
+
+    for line in lines:
+        parts = line.split(",")
+        coeffs = list(map(float, parts[:-2]))
+        rhs = float(parts[-2])
+        sign = parts[-1].strip()
+
+        if sign == ">=":
+            A.append([-c for c in coeffs])
+            b.append(-rhs)
+        else:
+            A.append(coeffs)
+            b.append(rhs)
+
+    return np.array(A), np.array(b)
+
+
+# ============================================================
+# RESOLVER CUADRÁTICO
+# ============================================================
+def resolver_cuadratica(Q, c, k, A, b, tipo="Minimizar"):
+
+    def f(x):
+        val = 0.5 * x.T @ Q @ x + c.T @ x + k
         return val if tipo == "Minimizar" else -val
-    
-    n = Q.shape[0]
-    res = minimize(f_obj, x0=np.zeros(n), constraints={'type': 'ineq', 'fun': lambda x: b_vec - A @ x})
+
+    n = len(c)
+
+    res = minimize(
+        f,
+        x0=np.zeros(n),
+        constraints={"type": "ineq", "fun": lambda x: b - A @ x}
+    )
+
     x_opt = res.x
-    f_opt = 0.5 * x_opt.T @ Q @ x_opt + c.T @ x_opt + const
+    f_opt = 0.5 * x_opt.T @ Q @ x_opt + c.T @ x_opt + k
+
     return x_opt, f_opt
 
-# ============================================================
-# FUNCIONES DE GRAFICACIÓN
-# ============================================================
-def graficar_1d(f, x_opt, a, b):
-    xs = np.linspace(min(a, x_opt) - 2, max(b, x_opt) + 2, 400)
-    ys = [f(xi) for xi in xs]
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=xs, y=ys, mode='lines', name='f(x)', line=dict(color='#0F3050', width=2)))
-    fig.add_trace(go.Scatter(x=[x_opt], y=[f(x_opt)], mode='markers', name='Óptimo', marker=dict(color='red', size=10)))
-    fig.update_layout(title="Gráfica de la función", xaxis_title="x", yaxis_title="f(x)")
-    return fig
 
-def graficar_nd(f, n, x_opt, hist, A=None, b_vec=None):
-    if n != 2:
-        return None
-    
-    margin = 5
-    x_range = np.linspace(x_opt[0] - margin, x_opt[0] + margin, 100)
-    y_range = np.linspace(x_opt[1] - margin, x_opt[1] + margin, 100)
-    X, Y = np.meshgrid(x_range, y_range)
-    Z = np.zeros_like(X)
-    
-    for i in range(X.shape[0]):
-        for j in range(X.shape[1]):
-            val = f([X[i, j], Y[i, j]])
-            if A is not None and b_vec is not None:
-                if any(A @ np.array([X[i, j], Y[i, j]]) - b_vec > 1e-6):
-                    Z[i, j] = np.nan
-                else:
-                    Z[i, j] = val
-            else:
-                Z[i, j] = val
+# ============================================================
+# STREAMLIT UI
+# ============================================================
+st.title("Programación Cuadrática Automática (KKT + QP)")
 
-    fig = go.Figure(data=go.Contour(x=x_range, y=y_range, z=Z, colorscale='Viridis', contours_coloring='lines'))
-    
-    if hist and 'x1' in hist[0]:
-        hx = [h['x1'] for h in hist]
-        hy = [h['x2'] for h in hist]
-        fig.add_trace(go.Scatter(x=hx, y=hy, mode='lines+markers', name='Iteraciones', marker=dict(color='red', size=6)))
-    
-    fig.add_trace(go.Scatter(x=[x_opt[0]], y=[x_opt[1]], mode='markers', name='Óptimo', marker=dict(color='black', size=10, symbol='star')))
-    fig.update_layout(title="Curvas de Nivel y Región Factible", xaxis_title="x1", yaxis_title="x2")
-    return fig
+st.markdown("### ✏️ Escribe la función directamente")
+
+expr_str = st.text_input(
+    "Función f(x1,x2):",
+    value="15*x1 + 30*x2 + 4*x1*x2 - 2*x1**2 - 4*x2**2"
+)
+
+n = st.selectbox("Número de variables:", [2, 3], index=0)
+
+tipo = st.selectbox("Tipo:", ["Minimizar", "Maximizar"])
+
+restricciones = st.text_area(
+    "Restricciones (coef,x1,x2,...,RHS,signo):",
+    value="1,2,30,<=\n1,0,0,>=\n0,1,0,>="
+)
+
+btn = st.button("Resolver")
+
+# ============================================================
+# EJECUCIÓN
+# ============================================================
+if btn:
+
+    vars_list = [f"x{i+1}" for i in range(n)]
+
+    # convertir función a Q, c, k
+    Q, c, k = parse_quadratic(expr_str, vars_list)
+
+    A, b = parse_restrictions(restricciones)
+
+    x_opt, f_opt = resolver_cuadratica(Q, c, k, A, b, tipo)
+
+    st.success("Resultado obtenido")
+
+    st.write("### 🔷 Q matrix")
+    st.write(Q)
+
+    st.write("### 🔷 c vector")
+    st.write(c)
+
+    st.write("### 🔷 constante")
+    st.write(k)
+
+    st.write("### 🏁 Solución óptima")
+    st.write(x_opt)
+
+    st.write("### 📌 f(x*)")
+    st.write(f_opt)
 
 # ============================================================
 # INTERFAZ PRINCIPAL (Panel Lateral y Lógica)
